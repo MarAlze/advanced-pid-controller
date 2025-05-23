@@ -1,6 +1,7 @@
 /***
 
-simple-pid-controller/index.js  Copyright 2023, Harshad Joshi and Bufferstack.IO Analytics Technology LLP. Pune
+simple-pid-controller/index.js  Copyright 2023, Harshad Joshi and Bufferstack.IO Analytics Technology LLP. Pune
+                                Copyright 2024, Marc Alzen and Rasche und Wessler GmbH.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -33,9 +34,11 @@ class PIDController {
    * @param {number} [dt=1.0] - Time interval between updates.
    * @param {number} [outputMin=0.0] - Minimum possible controller output.
    * @param {number} [outputMax=100.0] - Maximum possible controller output.
+   * @param {number} [deadband=0.5] - Tolerance band around the target within which output is zero.
    */
-  constructor(k_p = 1.0, k_i = 0.0, k_d = 0.0, dt = 1.0, outputMin = 0.0, outputMax = 100.0) {
-    if (typeof k_p !== 'number' || typeof k_i !== 'number' || typeof k_d !== 'number' || typeof dt !== 'number' || typeof outputMin !== 'number' || typeof outputMax !== 'number') {
+  constructor(k_p = 1.0, k_i = 0.0, k_d = 0.0, dt = 1.0, outputMin = 0.0, outputMax = 100.0, deadband = 0.5) {
+    // Validate constructor parameters
+    if (typeof k_p !== 'number' || typeof k_i !== 'number' || typeof k_d !== 'number' || typeof dt !== 'number' || typeof outputMin !== 'number' || typeof outputMax !== 'number' || typeof deadband !== 'number') {
       throw new Error('PID Controller constructor parameters must all be numbers');
     }
     if (dt <= 0) {
@@ -45,6 +48,9 @@ class PIDController {
     if (outputMin >= outputMax) {
         throw new Error('outputMin must be less than outputMax');
     }
+    if (deadband < 0) {
+        throw new Error('Deadband must be a non-negative number');
+    }
 
     this.k_p = k_p;
     this.k_i = k_i;
@@ -53,11 +59,12 @@ class PIDController {
 
     this.outputMin = outputMin; // Configurable minimum output
     this.outputMax = outputMax; // Configurable maximum output
+    this.deadband = deadband;   // Tolerance band around target
 
     this.target = 0;
     this.currentValue = 0;
     this.sumError = 0;
-    this.lastError = 0;
+    this.lastError = 0; // Stores error from previous update for derivative calculation (if used)
     this.previousCurrentValue = 0; // Stores currentValue from previous update for derivative calculation (avoids derivative kick)
     this.y = 0; // Current controller output
 
@@ -110,8 +117,19 @@ class PIDController {
     if (typeof target !== 'number') {
       throw new Error('Target must be a number');
     }
-
     this.target = target;
+  }
+
+  /**
+   * Set a new deadband value for the controller.
+   *
+   * @param {number} deadband - New non-negative deadband value.
+   */
+  setDeadband(deadband) {
+    if (typeof deadband !== 'number' || deadband < 0) {
+      throw new Error('Deadband must be a non-negative number');
+    }
+    this.deadband = deadband;
   }
 
   /**
@@ -127,38 +145,48 @@ class PIDController {
 
     this.previousCurrentValue = this.currentValue; // Store current value before updating for derivative
     this.currentValue = currentValue;
+
     const error = this.target - this.currentValue;
+
+    // Apply Deadband functionality: If current value is within the deadband of the target,
+    // the controller output is zero, and integral/derivative histories are reset to prevent
+    // sudden output changes when exiting the deadband.
+    if (this.deadband > 0 && Math.abs(error) <= this.deadband) {
+        this.sumError = 0; // Reset integral component
+        this.lastError = 0; // Reset last error for derivative (even if D-getter uses PV)
+        this.previousCurrentValue = this.currentValue; // Prevent D-spike when exiting deadband
+        this.y = 0; // Output is zero within deadband
+        return this.y;
+    }
+
+    // If outside deadband, proceed with normal PID calculation
     this.sumError += error * this.dt;
 
-
-    this.lastError = error;
+    this.lastError = error; // Update lastError for next iteration
 
     // Control value calculation
-
+    // Note: this.p, this.i, this.d are getters and are calculated dynamically here.
     this.y = this.p + this.i + this.d;
 
     // Anti-windup function for the I component and output clamping
     if (this.y >= this.outputMax) {
       this.y = this.outputMax;
       // Adjust sumError to prevent integral windup when output is saturated at max.
-      // This ensures that the integral term doesn't grow beyond what's needed to hold the output at max.
       if (this.k_i > 0) { // Only adjust if integral gain is positive and contributes to windup
         this.sumError = (this.outputMax - (this.p + this.d)) * this.k_i;
       } else {
         // If k_i is 0 or negative, integral term is not causing positive windup in this context.
-        // Reset sumError to 0 to prevent unexpected behavior with negative k_i or if k_i is 0.
         this.sumError = 0.0;
       }
     } else if (this.y <= this.outputMin) {
       this.y = this.outputMin;
       // Adjust sumError to prevent integral windup when output is saturated at min.
       // Using a small epsilon (0.01) if outputMin is 0, to allow integral to pull slightly.
-      const integralTarget = this.outputMin === 0 ? 0.01 : this.outputMin; // Use 0.01 if outputMin is 0
+      const integralTarget = this.outputMin === 0 ? 0.01 : this.outputMin;
       if (this.k_i > 0) { // Only adjust if integral gain is positive and contributes to windup
         this.sumError = (integralTarget - (this.p + this.d)) * this.k_i;
       } else {
         // If k_i is 0 or negative, integral term is not causing negative windup in this context.
-        // Reset sumError to 0 to prevent unexpected behavior with negative k_i or if k_i is 0.
         this.sumError = 0.0;
       }
     }
@@ -172,9 +200,9 @@ class PIDController {
   reset() {
     this.sumError = 0;
     this.lastError = 0;
-    this.previousCurrentValue = 0;
+    this.previousCurrentValue = 0; // Also reset previous value on reset
+    this.y = 0; // Ensure output is reset as well
   }
 }
 
 module.exports = PIDController;
-
