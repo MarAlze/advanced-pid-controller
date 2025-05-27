@@ -1,6 +1,6 @@
 {
-  "name": "simple-pid-controller",
-  "version": "1.0.3",
+  "name": "advanced-pid-controller",
+  "version": "1.0.0",
   "description": "A simple application to demonstrate the usage of a PID Controller with examples",
   "main": "index.js",
   "scripts": {
@@ -8,17 +8,21 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hj91/simple-pid-controller.git"
+    "url": "git+https://github.com/MarAlze/advanced-pid-controller.git"
   },
   "keywords": [
+    "Javascript",
     "PID",
     "Controller",
-    "Automation"
+    "Automation",
+    "node.js",
+    "anti-windup",
+    "deadband"
   ],
-  "author": "Harshad Joshi",
+  "author": "Marc Alzen",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/hj91/simple-pid-controller/issues"
+    "url": "https://github.com/MarAlze/advanced-pid-controller/issues"
   },
-  "homepage": "https://github.com/hj91/simple-pid-controller#readme"
+  "homepage": "https://github.com/MarAlze/advanced-pid-controller#readme"
 }

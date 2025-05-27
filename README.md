@@ -27,7 +27,7 @@ A Proportional-Integral-Derivative (PID) controller is a control loop feedback m
 To install this module, run the following command:
 
 ```sh
-npm install pid-controller
+npm install advanced-pid-controller
 ```
 
 ## Usage
@@ -35,7 +35,7 @@ npm install pid-controller
 First, require the module:
 
 ```javascript
-const PIDController = require('simple-pid-controller');
+const PIDController = require('advanced-pid-controller');
 ```
 
 Then, create a new PIDController instance. You can optionally provide proportional, integral, and derivative gains, as well as the output limits and deadband:
