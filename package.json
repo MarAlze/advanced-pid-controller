@@ -1,7 +1,7 @@
 {
   "name": "advanced-pid-controller",
-  "version": "1.0.0",
-  "description": "A simple application to demonstrate the usage of a PID Controller with examples",
+  "version": "1.0.1",
+  "description": "An advanced PID controller for Node.js with anti-windup, deadband, and configurable output limits, developed by Marc Alzen @ Rasche und Wessler GmbH",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -19,7 +19,7 @@
     "anti-windup",
     "deadband"
   ],
-  "author": "Marc Alzen",
+  "author": "Marc Alzen @ Rasche und Wessler GmbH",
   "license": "Apache-2.0",
   "bugs": {
     "url": "https://github.com/MarAlze/advanced-pid-controller/issues"

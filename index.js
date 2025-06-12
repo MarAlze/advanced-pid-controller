@@ -1,13 +1,13 @@
 /***
+advanced-pid-controller/index.js  Copyright 2025, Marc Alzen @ Rasche & Wessler GmbH.
 
-simple-pid-controller/index.js  Copyright 2023, Harshad Joshi and Bufferstack.IO Analytics Technology LLP. Pune
-                                Copyright 2024, Marc Alzen @ Rasche und Wessler GmbH.
+This project began as a fork of `simple-pid-controller` by Harshad Joshi (hj91). His foundational work provided the basis for this enhanced PID controller.                          
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+    http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,15 +28,15 @@ class PIDController {
   /**
    * Construct a PID Controller.
    *
-   * @param {number} [k_p=1.0] - Proportional gain.
-   * @param {number} [k_i=0.0] - Integral gain.
-   * @param {number} [k_d=0.0] - Derivative gain.
+   * @param {number} [k_p=0.15] - Proportional gain.
+   * @param {number} [k_i=0.1] - Integral gain.
+   * @param {number} [k_d=0.3] - Derivative gain.
    * @param {number} [dt=1.0] - Time interval between updates.
    * @param {number} [outputMin=0.0] - Minimum possible controller output.
    * @param {number} [outputMax=100.0] - Maximum possible controller output.
-   * @param {number} [deadband=0.5] - Tolerance band around the target within which output is zero.
+   * @param {number} [deadband=0.5] - Tolerance band around the target within which output is paused.
    */
-  constructor(k_p = 1.0, k_i = 0.0, k_d = 0.0, dt = 1.0, outputMin = 0.0, outputMax = 100.0, deadband = 0.5) {
+  constructor(k_p = 0.15, k_i = 0.1, k_d = 0.03, dt = 1.0, outputMin = 0.0, outputMax = 100.0, deadband = 0.5) {
     // Validate constructor parameters
     if (typeof k_p !== 'number' || typeof k_i !== 'number' || typeof k_d !== 'number' || typeof dt !== 'number' || typeof outputMin !== 'number' || typeof outputMax !== 'number' || typeof deadband !== 'number') {
       throw new Error('PID Controller constructor parameters must all be numbers');
@@ -62,11 +62,21 @@ class PIDController {
     this.deadband = deadband;   // Tolerance band around target
 
     this.target = 0;
-    this.currentValue = 0;
+    this.currentValue = 0;      // Initialisiert den aktuellen Wert auf 0
     this.sumError = 0;
-    this.lastError = 0; // Stores error from previous update for derivative calculation (if used)
-    this.previousCurrentValue = 0; // Stores currentValue from previous update for derivative calculation (avoids derivative kick)
-    this.y = 0; // Current controller output
+    this.lastError = 0;         // Stores error from previous update (if error-based D is used)
+    this.previousCurrentValue = 0; // Speichert den Wert vom vorherigen Update für die D-Berechnung. Initial auf 0.
+    this.y = 0;                 // Current controller output
+
+    // Internal variables to hold the calculated component values for getters
+    // These will hold the last computed values when controller is paused.
+    this._p_val = 0;
+    this._i_val = 0;
+    this._d_val = 0;
+
+    // Flag to skip derivative calculation on the very first active update
+    // This prevents a large D-kick if previousValue is uninitialized or 0.
+    this._isFirstActiveUpdate = true;
 
     // Define getters for P, I, and D values
     this.defineGetters();
@@ -74,36 +84,24 @@ class PIDController {
 
   /**
    * Define getters for P, I, and D components.
+   * These getters now return the internally stored calculated values.
    */
   defineGetters() {
     Object.defineProperty(this, 'p', {
       get: function() {
-        return this.k_p * (this.target - this.currentValue);
+        return this._p_val;
       }
     });
 
     Object.defineProperty(this, 'i', {
       get: function() {
-        // If k_i is 0, the integral term is 0. Avoid division by zero.
-        if (this.k_i === 0) {
-          return 0;
-        }
-        // Invert the k_i value so that the control value calculation below is simplified.
-        // This means 'i' represents the integral term *before* multiplication by k_i,
-        // which is then effectively applied in the anti-windup logic.
-        return this.sumError / this.k_i;
+        return this._i_val;
       }
     });
 
     Object.defineProperty(this, 'd', {
       get: function() {
-        // If k_d is 0, the derivative term is 0. Avoid division by zero.
-        if (this.k_d === 0 || this.dt === 0) {
-          return 0;
-        }
-        // Calculate derivative based on change in process variable (currentValue)
-        // This helps to avoid "derivative kick" when the setpoint (target) changes suddenly.
-        return this.k_d * (this.currentValue - this.previousCurrentValue) / this.dt;
+        return this._d_val;
       }
     });
   }
@@ -143,51 +141,73 @@ class PIDController {
       throw new Error('Current value must be a number');
     }
 
-    this.previousCurrentValue = this.currentValue; // Store current value before updating for derivative
-    this.currentValue = currentValue;
+    // Der aktuelle PV-Wert für diese Iteration
+    const currentProcessValue = currentValue; 
+    const error = this.target - currentProcessValue;
 
-    const error = this.target - this.currentValue;
-
-    // Apply Deadband functionality: If current value is within the deadband of the target,
-    // the controller output is zero, and integral/derivative histories are reset to prevent
-    // sudden output changes when exiting the deadband.
+    // --- Deadband Functionality (Pausing the controller) ---
+    // Wenn der Prozesswert im Deadband ist, werden alle Regelberechnungen pausiert.
+    // Der Output und die Komponentenwerte behalten ihren letzten aktiven Zustand bei.
     if (this.deadband > 0 && Math.abs(error) <= this.deadband) {
-        this.sumError = 0; // Reset integral component
-        this.lastError = 0; // Reset last error for derivative (even if D-getter uses PV)
-        this.previousCurrentValue = this.currentValue; // Prevent D-spike when exiting deadband
-        this.y = 0; // Output is zero within deadband
-        return this.y;
+        // Der D-Anteil muss wieder aktiv werden, sobald das Deadband verlassen wird.
+        // Dafür muss `_isFirstActiveUpdate` auf false gesetzt werden.
+        // WICHTIG: `previousCurrentValue` wird im Deadband NICHT aktualisiert,
+        // da es den Wert vom letzten AKTIVEN Schritt halten soll.
+        if (this._isFirstActiveUpdate === false) { // Wenn wir bereits aktiv waren, aber jetzt ins Deadband gehen
+            this._isFirstActiveUpdate = true; // Setze Flag zurück, damit D-Anteil bei Wiederaufnahme des Reglers
+                                              // nicht sofort einen Kick verursacht, falls der Wert stark springt.
+                                              // (Alternative: previousCurrentValue = currentProcessValue HIER setzen)
+                                              // Die hier gewählte Methode ist sicherer, um den D-Kick bei Wiedereinstieg zu vermeiden.
+        }
+        return this.y; // Gebe den letzten aktiven Output zurück
     }
 
-    // If outside deadband, proceed with normal PID calculation
+    // --- Normal PID Calculation (if outside deadband) ---
+
+    // Setze das Flag zurück, da wir jetzt aktiv sind.
+    this._isFirstActiveUpdate = false; 
+
+    // Calculate P-component
+    this._p_val = this.k_p * error;
+
+    // Accumulate error for Integral term
     this.sumError += error * this.dt;
+    this._i_val = this.k_i * this.sumError;
 
-    this.lastError = error; // Update lastError for next iteration
+    // Calculate D-component
+    // WICHTIG: D-Anteil nur berechnen, wenn dies NICHT der erste aktive Durchlauf ist
+    // seit dem Start oder Reset des Reglers. Dies verhindert den "D-Kick".
+    if (this.dt === 0) { // Sicherheitscheck
+        this._d_val = 0;
+    } else if (this.previousCurrentValue === 0 && currentProcessValue !== 0) { // Spezieller Fall für den allerersten "echten" Wert
+        // Wenn previousCurrentValue noch der Initialwert (0) ist und der aktuelle PV nicht 0 ist,
+        // gehen wir davon aus, dass dies der erste "sinnvolle" Wert ist und setzen D auf 0.
+        this._d_val = 0;
+    } else {
+        // D-Anteil basierend auf der Änderung des Prozesswertes (aktuell - vorherig)
+        this._d_val = this.k_d * (currentProcessValue - this.previousCurrentValue) / this.dt;
+    }
+    
+    // Speichere den aktuellen Prozesswert als "vorherigen" Wert für die D-Berechnung im nächsten Iterationszyklus.
+    this.previousCurrentValue = currentProcessValue;
 
-    // Control value calculation
-    // Note: this.p, this.i, this.d are getters and are calculated dynamically here.
-    this.y = this.p + this.i + this.d;
 
-    // Anti-windup function for the I component and output clamping
+    // Control value calculation: Sum of P, I, D components
+    this.y = this._p_val + this._i_val + this._d_val;
+
+    // --- Anti-windup functionality and Output Clamping ---
+    // Dies verhindert, dass der Integralanteil unkontrolliert anwächst, wenn der Output gesättigt ist.
     if (this.y >= this.outputMax) {
       this.y = this.outputMax;
-      // Adjust sumError to prevent integral windup when output is saturated at max.
-      if (this.k_i > 0) { // Only adjust if integral gain is positive and contributes to windup
-        this.sumError = (this.outputMax - (this.p + this.d)) * this.k_i;
-      } else {
-        // If k_i is 0 or negative, integral term is not causing positive windup in this context.
-        this.sumError = 0.0;
+      // Passe sumError an, wenn der Integralanteil zur Sättigung über outputMax beiträgt
+      if (this.k_i > 0 && this._i_val > (this.outputMax - (this._p_val + this._d_val))) {
+          this.sumError = (this.outputMax - (this._p_val + this._d_val)) / this.k_i;
       }
     } else if (this.y <= this.outputMin) {
       this.y = this.outputMin;
-      // Adjust sumError to prevent integral windup when output is saturated at min.
-      // Using a small epsilon (0.01) if outputMin is 0, to allow integral to pull slightly.
-      const integralTarget = this.outputMin === 0 ? 0.01 : this.outputMin;
-      if (this.k_i > 0) { // Only adjust if integral gain is positive and contributes to windup
-        this.sumError = (integralTarget - (this.p + this.d)) * this.k_i;
-      } else {
-        // If k_i is 0 or negative, integral term is not causing negative windup in this context.
-        this.sumError = 0.0;
+      // Passe sumError an, wenn der Integralanteil zur Sättigung unter outputMin beiträgt
+      if (this.k_i > 0 && this._i_val < (this.outputMin - (this._p_val + this._d_val))) {
+          this.sumError = (this.outputMin - (this._p_val + this._d_val)) / this.k_i;
       }
     }
 
@@ -196,12 +216,18 @@ class PIDController {
 
   /**
    * Reset function to restart the controller at 0, e.g. after manual operation or an interruption.
+   * Clears all internal accumulated states and resets component values.
    */
   reset() {
     this.sumError = 0;
-    this.lastError = 0;
-    this.previousCurrentValue = 0; // Also reset previous value on reset
+    this.lastError = 0; // Reset lastError (though D-getter uses PV)
+    this.currentValue = 0; // Set current value to a neutral state
+    this.previousCurrentValue = 0; // Reset previous value for D-calculation
     this.y = 0; // Ensure output is reset as well
+    this._p_val = 0; // Reset displayed P-component
+    this._i_val = 0; // Reset displayed I-component
+    this._d_val = 0; // Reset displayed D-component
+    this._isFirstActiveUpdate = true; // Set flag to true for the next active update
   }
 }
 

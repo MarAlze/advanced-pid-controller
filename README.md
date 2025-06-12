@@ -1,6 +1,6 @@
 # PID Controller
 
-This is a fork of the `simple-pid-controller` project by hj91. This repository extends the original implementation with important features to improve the robustness and flexibility of the PID controller.
+This repository provides a highly robust and flexible Proportional-Integral-Derivative (PID) controller for Node.js environments. It originated as a fork of the `simple-pid-controller` project by hj91 and has been significantly extended with advanced features.
 
 ## New Features and Improvements
 
@@ -130,10 +130,17 @@ By using this module, developers can implement PID control in their Node.js appl
 
 ## License
 
-This module is licensed under the Apache License.
+This module is licensed under the **Apache License 2.0**.
 
-## Authors and Contributors
+The full text of the license is available in the `LICENSE` file in this repository.
 
-* **Original Author**: Harshad Joshi @ Bufferstack.IO Analytics Technology LLP, Pune
+## Authors and Maintainers
 
-* **Contributions**: Marc Alzen @ Rasche und Wessler GmbH (Anti-windup, improved D-component, configurable output limits, deadband functionality, and other enhancements)
+**Developed and Maintained by**: Marc Alzen @ Rasche & Wessler GmbH
+    * This project is actively developed and maintained by Rasche & Wessler GmbH, led by Marc Alzen.
+
+### Original Work & Contributions
+
+**Based on Original Work by**: Harshad Joshi @ Bufferstack.IO Analytics Technology LLP, Pune
+    * This project began as a fork of `simple-pid-controller` by Harshad Joshi (hj91). His foundational work provided the basis for this enhanced PID controller.
+**Key Enhancements**: Anti-windup, improved D-component, configurable output limits, deadband functionality, and other enhancements.
