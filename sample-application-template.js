@@ -36,9 +36,23 @@ const COOLING_RATE_FACTOR = 0.5; // Natural cooling per degree difference from r
 
 // --- PID Controller Configuration ---
 const Kp = 0.1;   // Proportional gain
-const Ki = 0.5;  // Integral gain
+let Ki = 0.5;   // Integral gain (or TN in seconds if USE_CODESYS_I is true, e.g. 2.0 seconds)
 const Kd = 0.1;   // Derivative gain
 const CONTROLLER_DT_SEC = SIMULATION_DT_MS / 1000; // dt for the controller in seconds
+
+// Set to true to run the simulation using Codesys-compatible trapezoidal integration & scaling
+const USE_CODESYS_I = true;
+
+if (USE_CODESYS_I) {
+    console.log("Running in CODESYS-compatible mode (Trapezoidal Integration & Dynamic Anti-Windup)");
+    console.log("NOTE: Ki is interpreted as 'TN' (Time Constant) in seconds. Ki=0 disables the integrator.");
+    console.log("NOTE: Ki values will appear much larger in the I-Component output than in standard PI mode.");
+    console.log("      This is expected behavior for this integration method.");
+    Ki = 5;
+    console.log("Using Ki (TN) = ", Ki);
+} else {
+    console.log("Running in Standard PID mode");
+}
 
 // Controller output limits (e.g., heating power from 0% to 100%)
 const OUTPUT_MIN = 0;
@@ -47,8 +61,8 @@ const OUTPUT_MAX = 100;
 // Deadband: +/- tolerance around the setpoint within which the controller output is zero
 const DEADBAND = 0.5; // +/- 0.5 °C
 
-// Create a PID Controller instance with all new parameters
-const controller = new PIDController(Kp, Ki, Kd, CONTROLLER_DT_SEC, OUTPUT_MIN, OUTPUT_MAX, DEADBAND);
+// Create a PID Controller instance with all parameters, including the new Codesys mode flag
+const controller = new PIDController(Kp, Ki, Kd, CONTROLLER_DT_SEC, OUTPUT_MIN, OUTPUT_MAX, DEADBAND, USE_CODESYS_I);
 
 console.log("--- PID Controller Simulation Start ---");
 console.log(`Initial Temperature: ${currentTemperature.toFixed(2)} °C`);
@@ -98,14 +112,14 @@ const simulationInterval = setInterval(() => {
 
     let currentSimulationTimeSec = currentSimulationTimeMs / 1000
     // Log current state and PID components
-    if (currentSimulationTimeSec % 1 === 0){
+    if (currentSimulationTimeSec % 1 === 0) {
         console.log(
             `Time: ${currentSimulationTimeSec}.0s | Temp: ${currentTemperature.toFixed(2)} | Target: ${controller.target.toFixed(2)} | Output: ${controlOutput.toFixed(2)} | P:${controller.p.toFixed(2)} I:${controller.i.toFixed(2)} D:${controller.d.toFixed(2)}`
-        );     
+        );
     } else {
         console.log(
             `Time: ${currentSimulationTimeSec}s | Temp: ${currentTemperature.toFixed(2)} | Target: ${controller.target.toFixed(2)} | Output: ${controlOutput.toFixed(2)} | P:${controller.p.toFixed(2)} I:${controller.i.toFixed(2)} D:${controller.d.toFixed(2)}`
-        );  
+        );
     }
 
 

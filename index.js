@@ -29,17 +29,25 @@ class PIDController {
    * Construct a PID Controller.
    *
    * @param {number} [k_p=0.15] - Proportional gain.
-   * @param {number} [k_i=0.1] - Integral gain.
-   * @param {number} [k_d=0.3] - Derivative gain.
+   * @param {number} [k_i=0.1] - Integral gain (or integration time TN in seconds if useCodesysI is true).
+   * @param {number} [k_d=0.03] - Derivative gain.
    * @param {number} [dt=1.0] - Time interval between updates.
    * @param {number} [outputMin=0.0] - Minimum possible controller output.
    * @param {number} [outputMax=100.0] - Maximum possible controller output.
    * @param {number} [deadband=0.5] - Tolerance band around the target within which output is paused.
+   * @param {boolean} [useCodesysI=false] - If true, integral part behaves like a Codesys PID controller.
+   * @param {number} [iClamp=0] - Maximum absolute value for the integral term (0 to disable clamping).
    */
-  constructor(k_p = 0.15, k_i = 0.1, k_d = 0.03, dt = 1.0, outputMin = 0.0, outputMax = 100.0, deadband = 0.5) {
+  constructor(k_p = 0.15, k_i = 0.1, k_d = 0.03, dt = 1.0, outputMin = 0.0, outputMax = 100.0, deadband = 0.5, useCodesysI = false, iClamp = 0) {
     // Validate constructor parameters
-    if (typeof k_p !== 'number' || typeof k_i !== 'number' || typeof k_d !== 'number' || typeof dt !== 'number' || typeof outputMin !== 'number' || typeof outputMax !== 'number' || typeof deadband !== 'number') {
+    if (typeof k_p !== 'number' || typeof k_i !== 'number' || typeof k_d !== 'number' || typeof dt !== 'number' || typeof outputMin !== 'number' || typeof outputMax !== 'number' || typeof deadband !== 'number' || typeof iClamp !== 'number') {
       throw new Error('PID Controller constructor parameters must all be numbers');
+    }
+    if (typeof useCodesysI !== 'boolean') {
+      throw new Error('useCodesysI parameter must be a boolean');
+    }
+    if (iClamp < 0) {
+      throw new Error('iClamp must be a non-negative number');
     }
     if (dt <= 0) {
         // dt must be positive to avoid division by zero and ensure proper time progression
@@ -56,16 +64,18 @@ class PIDController {
     this.k_i = k_i;
     this.k_d = k_d;
     this.dt = dt;
+    this.useCodesysI = useCodesysI;
+    this.iClamp = iClamp;
 
     this.outputMin = outputMin; // Configurable minimum output
     this.outputMax = outputMax; // Configurable maximum output
     this.deadband = deadband;   // Tolerance band around target
 
     this.target = 0;
-    this.currentValue = 0;      // Initialisiert den aktuellen Wert auf 0
+    this.currentValue = 0;      // Initializes current value to 0
     this.sumError = 0;
-    this.lastError = 0;         // Stores error from previous update (if error-based D is used)
-    this.previousCurrentValue = 0; // Speichert den Wert vom vorherigen Update für die D-Berechnung. Initial auf 0.
+    this.lastError = 0;         // Stores error from previous update (used for trapezoidal integration)
+    this.previousCurrentValue = 0; // Stores the value from the previous update for D calculation. Initialized to 0.
     this.y = 0;                 // Current controller output
 
     // Internal variables to hold the calculated component values for getters
@@ -84,7 +94,7 @@ class PIDController {
 
   /**
    * Define getters for P, I, and D components.
-   * These getters now return the internally stored calculated values.
+   * These getters return the internally stored calculated values.
    */
   defineGetters() {
     Object.defineProperty(this, 'p', {
@@ -141,54 +151,100 @@ class PIDController {
       throw new Error('Current value must be a number');
     }
 
-    // Der aktuelle PV-Wert für diese Iteration
+    // The current PV value for this iteration
     const currentProcessValue = currentValue; 
     const error = this.target - currentProcessValue;
 
     // --- Deadband Functionality (Pausing the controller) ---
-    // Wenn der Prozesswert im Deadband ist, werden alle Regelberechnungen pausiert.
-    // Der Output und die Komponentenwerte behalten ihren letzten aktiven Zustand bei.
+    // If the process value is within the deadband, all controller calculations are paused.
+    // The output and component values retain their last active state.
     if (this.deadband > 0 && Math.abs(error) <= this.deadband) {
-        // Der D-Anteil muss wieder aktiv werden, sobald das Deadband verlassen wird.
-        // Dafür muss `_isFirstActiveUpdate` auf false gesetzt werden.
-        // WICHTIG: `previousCurrentValue` wird im Deadband NICHT aktualisiert,
-        // da es den Wert vom letzten AKTIVEN Schritt halten soll.
-        if (this._isFirstActiveUpdate === false) { // Wenn wir bereits aktiv waren, aber jetzt ins Deadband gehen
-            this._isFirstActiveUpdate = true; // Setze Flag zurück, damit D-Anteil bei Wiederaufnahme des Reglers
-                                              // nicht sofort einen Kick verursacht, falls der Wert stark springt.
-                                              // (Alternative: previousCurrentValue = currentProcessValue HIER setzen)
-                                              // Die hier gewählte Methode ist sicherer, um den D-Kick bei Wiedereinstieg zu vermeiden.
+        // The D-component must become active again as soon as the deadband is exited.
+        // For this, `_isFirstActiveUpdate` must be set to true.
+        // IMPORTANT: `previousCurrentValue` is NOT updated in the deadband,
+        // because it should hold the value from the last ACTIVE step.
+        if (this._isFirstActiveUpdate === false) { // If we were active before, but now enter the deadband
+            this._isFirstActiveUpdate = true; // Reset flag so D-component doesn't cause a kick on re-entry
         }
-        return this.y; // Gebe den letzten aktiven Output zurück
+        return this.y; // Return the last active output
     }
 
     // --- Normal PID Calculation (if outside deadband) ---
 
-    // Setze das Flag zurück, da wir jetzt aktiv sind.
+    const isFirstActive = this._isFirstActiveUpdate;
+    // Reset the first update flag as we are now active.
     this._isFirstActiveUpdate = false; 
 
     // Calculate P-component
     this._p_val = this.k_p * error;
 
-    // Accumulate error for Integral term
-    this.sumError += error * this.dt;
-    this._i_val = this.k_i * this.sumError;
+    // Run Integrator
+    if (this.useCodesysI) {
+      if (this.k_i === 0) {
+        this._i_val = 0;
+        this.sumError = 0;
+      } else {
+        if (isFirstActive) {
+          this.lastError = error;
+        }
+        // Trapezoidal integration rule (Codesys compliant)
+        const increment = (error + this.lastError) * 0.5 * this.dt;
+        this.sumError += increment;
+        if (Math.abs(this.k_p) > 1e-15) {
+          this._i_val = (this.k_p / this.k_i) * this.sumError;
+        } else {
+          this._i_val = 0;
+        }
+      }
+      this.lastError = error; // Store error for the next iteration
+    } else {
+      // Standard rectangular integration
+      this.sumError += error * this.dt;
+      this._i_val = this.k_i * this.sumError;
+    }
+
+    // Apply integral clamp if specified (iClamp > 0)
+    if (this.iClamp > 0) {
+      if (this._i_val > this.iClamp) {
+        this._i_val = this.iClamp;
+        if (this.useCodesysI) {
+          if (this.k_i > 0 && Math.abs(this.k_p) > 1e-15) {
+            this.sumError = this.iClamp * this.k_i / this.k_p;
+          }
+        } else {
+          if (this.k_i !== 0) {
+            this.sumError = this.iClamp / this.k_i;
+          }
+        }
+      } else if (this._i_val < -this.iClamp) {
+        this._i_val = -this.iClamp;
+        if (this.useCodesysI) {
+          if (this.k_i > 0 && Math.abs(this.k_p) > 1e-15) {
+            this.sumError = -this.iClamp * this.k_i / this.k_p;
+          }
+        } else {
+          if (this.k_i !== 0) {
+            this.sumError = -this.iClamp / this.k_i;
+          }
+        }
+      }
+    }
 
     // Calculate D-component
-    // WICHTIG: D-Anteil nur berechnen, wenn dies NICHT der erste aktive Durchlauf ist
-    // seit dem Start oder Reset des Reglers. Dies verhindert den "D-Kick".
-    if (this.dt === 0) { // Sicherheitscheck
+    // IMPORTANT: Only calculate D-component if this is NOT the first active run
+    // since the controller started or reset. This prevents the "D-kick".
+    if (this.dt === 0) { // Safety check
         this._d_val = 0;
-    } else if (this.previousCurrentValue === 0 && currentProcessValue !== 0) { // Spezieller Fall für den allerersten "echten" Wert
-        // Wenn previousCurrentValue noch der Initialwert (0) ist und der aktuelle PV nicht 0 ist,
-        // gehen wir davon aus, dass dies der erste "sinnvolle" Wert ist und setzen D auf 0.
+    } else if (this.previousCurrentValue === 0 && currentProcessValue !== 0) { // Special case for the very first "real" value
+        // If previousCurrentValue is still the initial value (0) and current PV is not 0,
+        // we assume this is the first meaningful value and set D to 0.
         this._d_val = 0;
     } else {
-        // D-Anteil basierend auf der Änderung des Prozesswertes (aktuell - vorherig)
+        // D-component based on the change of the process value (current - previous)
         this._d_val = this.k_d * (currentProcessValue - this.previousCurrentValue) / this.dt;
     }
     
-    // Speichere den aktuellen Prozesswert als "vorherigen" Wert für die D-Berechnung im nächsten Iterationszyklus.
+    // Store the current process value as "previous" value for the D-calculation in the next iteration.
     this.previousCurrentValue = currentProcessValue;
 
 
@@ -196,18 +252,30 @@ class PIDController {
     this.y = this._p_val + this._i_val + this._d_val;
 
     // --- Anti-windup functionality and Output Clamping ---
-    // Dies verhindert, dass der Integralanteil unkontrolliert anwächst, wenn der Output gesättigt ist.
+    // This prevents the integral term from accumulating uncontrollably when the output is saturated.
     if (this.y >= this.outputMax) {
       this.y = this.outputMax;
-      // Passe sumError an, wenn der Integralanteil zur Sättigung über outputMax beiträgt
-      if (this.k_i > 0 && this._i_val > (this.outputMax - (this._p_val + this._d_val))) {
+      // Adjust sumError if the integral term contributes to the saturation above outputMax
+      if (this.useCodesysI) {
+        if (this.k_i > 0 && Math.abs(this.k_p) > 1e-15 && this._i_val > (this.outputMax - (this._p_val + this._d_val))) {
+          this.sumError = (this.outputMax - (this._p_val + this._d_val)) * this.k_i / this.k_p;
+        }
+      } else {
+        if (this.k_i > 0 && this._i_val > (this.outputMax - (this._p_val + this._d_val))) {
           this.sumError = (this.outputMax - (this._p_val + this._d_val)) / this.k_i;
+        }
       }
     } else if (this.y <= this.outputMin) {
       this.y = this.outputMin;
-      // Passe sumError an, wenn der Integralanteil zur Sättigung unter outputMin beiträgt
-      if (this.k_i > 0 && this._i_val < (this.outputMin - (this._p_val + this._d_val))) {
+      // Adjust sumError if the integral term contributes to the saturation below outputMin
+      if (this.useCodesysI) {
+        if (this.k_i > 0 && Math.abs(this.k_p) > 1e-15 && this._i_val < (this.outputMin - (this._p_val + this._d_val))) {
+          this.sumError = (this.outputMin - (this._p_val + this._d_val)) * this.k_i / this.k_p;
+        }
+      } else {
+        if (this.k_i > 0 && this._i_val < (this.outputMin - (this._p_val + this._d_val))) {
           this.sumError = (this.outputMin - (this._p_val + this._d_val)) / this.k_i;
+        }
       }
     }
 
@@ -220,7 +288,7 @@ class PIDController {
    */
   reset() {
     this.sumError = 0;
-    this.lastError = 0; // Reset lastError (though D-getter uses PV)
+    this.lastError = 0; // Reset lastError
     this.currentValue = 0; // Set current value to a neutral state
     this.previousCurrentValue = 0; // Reset previous value for D-calculation
     this.y = 0; // Ensure output is reset as well

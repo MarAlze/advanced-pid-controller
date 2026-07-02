@@ -8,7 +8,7 @@ The following significant improvements have been added:
 
 * **Deadband Functionality**: A configurable deadband (tolerance band) around the target value has been introduced. When the process variable is within this band, the controller output is set to zero, and integral/derivative histories are reset. This prevents unnecessary control actions and reduces system "chatter" when the system is close to the setpoint.
 
-* **Anti-Windup Functionality**: The controller now prevents the integral component from growing uncontrollably when the controller's output reaches its predefined saturation limits. This ensures more stable control behavior, especially during large setpoint changes or disturbances.
+* **Anti-Windup Functionality**: The controller prevents the integral component from growing uncontrollably when the controller's output reaches its predefined saturation limits. This dynamic output-based anti-windup remains fully active. Additionally, an optional static **Integral Clamping** (`iClamp`) feature can be used to set a maximum limit specifically on the I-component itself.
 
 * **Improved D-Component ("Derivative Kick" Avoidance)**: The derivative is now calculated based on the change in the process value (`currentValue`) instead of the change in error. This eliminates the undesirable "derivative kick" that can occur with sudden setpoint changes, leading to smoother control behavior.
 
@@ -86,11 +86,11 @@ console.log(`D-Component: ${controller1.d}`);
 
 This module exports the `PIDController` class, which has the following methods and properties:
 
-* `constructor(k_p = 1.0, k_i = 0.0, k_d = 0.0, dt = 1.0, outputMin = 0.0, outputMax = 100.0, deadband = 0.5)`: Constructs a new PIDController.
+* `constructor(k_p = 0.15, k_i = 0.1, k_d = 0.03, dt = 1.0, outputMin = 0.0, outputMax = 100.0, deadband = 0.5, useCodesysI = false, iClamp = 0)`: Constructs a new PIDController.
 
     * `k_p`: Proportional gain.
 
-    * `k_i`: Integral gain.
+    * `k_i`: Integral gain. If `useCodesysI` is `true`, this acts as the integration time constant `TN` in seconds (where a larger value slows down the integration speed, and a value of `0` disables the integrator).
 
     * `k_d`: Derivative gain.
 
@@ -101,6 +101,10 @@ This module exports the `PIDController` class, which has the following methods a
     * `outputMax`: Maximum possible controller output.
 
     * `deadband`: Tolerance band around the target within which output is zero (must be non-negative).
+
+    * `useCodesysI`: Optional boolean (default `false`). If `true`, the integral (I) component behaves like a Codesys PID controller, utilizing trapezoidal integration with effective integral gain of `k_p / TN` and dynamic anti-windup clamping.
+
+    * `iClamp`: Optional number (default `0`). If greater than `0`, sets the maximum absolute value for the integral component (integral windup clamping). Setting this does not disable the general output-saturation anti-windup; they work together to ensure stability. Set to `0` to disable.
 
 * `setTarget(target)`: Sets a new target for the controller.
 
